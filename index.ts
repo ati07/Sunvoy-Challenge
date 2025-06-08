@@ -1,0 +1,1 @@
+console.log('Sunvoy Challenge TypeScript Script with fetch');
