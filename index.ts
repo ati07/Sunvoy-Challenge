@@ -181,7 +181,6 @@ async function fetchUsers(cookies: string): Promise<User[]> {
 }
 async function main(): Promise<void> {
   const cookies = await getCredentials();
-  // console.log('Logged in with cookies:', cookies);
 
   let users: User[] = [];
   try {
