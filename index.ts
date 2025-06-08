@@ -1,6 +1,7 @@
+import * as cheerio from 'cheerio';
 import { promises as fs } from 'fs';
 import * as path from 'path';
-import * as cheerio from 'cheerio';
+import * as crypto from 'crypto';
 
 interface Credentials { cookies: string; }
 interface NonceResponse { nonce: string; cookies: string | null; }
@@ -11,15 +12,49 @@ interface User {
   [key: string]: any;
 }
 
+interface Tokens {
+  access_token: string;
+  userId: string;
+  openId: string;
+  operateId: string;
+  apiuser: string;
+  language: string;
+}
+
+interface SignedRequest {
+  payload: string;
+  checkcode: string;
+  fullPayload: string;
+  timestamp: string;
+}
+
 const config = {
   BASE_URL: 'https://challenge.sunvoy.com',
   LOGIN_PAGE_URL: 'https://challenge.sunvoy.com/login',
   LOGIN_URL: 'https://challenge.sunvoy.com/login',
+  TOKENS_URL: 'https://challenge.sunvoy.com/settings/tokens',
   USERS_URL: 'https://challenge.sunvoy.com/api/users',
   CREDENTIALS_FILE: path.join(__dirname, 'session.json'),
   OUTPUT_FILE: path.join(__dirname, 'users.json'),
 };
 
+function createSignedRequest(params: Record<string, string>): SignedRequest {
+  const timestamp: string = Math.floor(Date.now() / 1000).toString();
+  const payload: Record<string, string> = { ...params, timestamp };
+  const sortedKeys: string[] = Object.keys(payload).sort();
+  const encodedPayload: string = sortedKeys
+    .map((key: string) => `${key}=${encodeURIComponent(payload[key])}`)
+    .join('&');
+  const hmac: crypto.Hmac = crypto.createHmac('sha1', 'mys3cr3t');
+  hmac.update(encodedPayload);
+  const checkcode: string = hmac.digest('hex').toUpperCase();
+  return {
+    payload: encodedPayload,
+    checkcode,
+    fullPayload: `${encodedPayload}&checkcode=${checkcode}`,
+    timestamp,
+  };
+}
 
 async function getNonce(): Promise<NonceResponse> {
   try {
@@ -106,14 +141,85 @@ async function login({ nonce, cookies }: NonceResponse): Promise<string> {
   }
 }
 
+async function areCredentialsValid(cookies: string): Promise<boolean> {
+  try {
+    const response: Response = await fetch(config.TOKENS_URL, {
+      method: 'GET',
+      headers: {
+        'cookie': cookies,
+        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36',
+      },
+    });
+    if (response.status !== 200) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    console.log('Credentials are valid');
+    return true;
+  } catch (error: any) {
+    console.error('Credential validation failed:', error.message);
+    return false;
+  }
+}
 
 async function getCredentials(): Promise<string> {
-  
+  try {
+    const sessionData: string = await fs.readFile(config.CREDENTIALS_FILE, 'utf8');
+    const { cookies }: Credentials = JSON.parse(sessionData);
+    if (await areCredentialsValid(cookies)) {
+      console.log('Reusing existing credentials');
+      return cookies;
+    }
+  } catch {
+    console.log('No valid credentials found, logging in');
+  }
   const nonceResponse: NonceResponse = await getNonce(); // get nonce token and cookies
   return await login(nonceResponse);
 }
 
-
+async function fetchTokens(cookies: string): Promise<Tokens> {
+  try {
+    const response: Response = await fetch(config.TOKENS_URL, {
+      method: 'GET',
+      headers: {
+        'cookie': cookies,
+        'accept': '*/*',
+        'accept-language': 'en-US,en;q=0.9',
+        'priority': 'u=1, i',
+        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36',
+        'sec-ch-ua': '"Google Chrome";v="137", "Chromium";v="137", "Not/A)Brand";v="24"',
+        'sec-ch-ua-mobile': '?0',
+        'sec-ch-ua-platform': '"Windows"',
+        'sec-fetch-dest': 'empty',
+        'sec-fetch-mode': 'cors',
+        'sec-fetch-site': 'same-origin',
+        'referer': `${config.BASE_URL}/settings`,
+        'referrer-policy': 'strict-origin-when-cross-origin',
+      },
+    });
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    const text: string = await response.text();
+    const $ = cheerio.load(text);
+    const tokens: Tokens = {
+      access_token: $('#access_token').val() || '',
+      userId: $('#userId').val() || '',
+      openId: $('#openId').val() || '',
+      operateId: $('#operateId').val() || '',
+      apiuser: $('#apiuser').val() || '',
+      language: $('#language').val() || '',
+    };
+    console.log('Tokens extracted:', tokens);
+    if (!tokens.access_token || !tokens.userId) {
+      console.error('Tokens response HTML:', text);
+      throw new Error('Failed to extract required tokens');
+    }
+    return tokens;
+  } catch (error: any) {
+    console.error('Failed to fetch tokens:', error.message);
+    throw error;
+  }
+}
 async function fetchUsers(cookies: string): Promise<User[]> {
   try {
     const response: Response = await fetch(config.USERS_URL, {
@@ -179,6 +285,7 @@ async function fetchUsers(cookies: string): Promise<User[]> {
     }
   }
 }
+
 async function main(): Promise<void> {
   const cookies = await getCredentials();
 
