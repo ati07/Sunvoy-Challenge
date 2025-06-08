@@ -65,6 +65,7 @@ function createSignedRequest(params) {
         timestamp,
     };
 }
+// Function to fetch nonce from the login page
 async function getNonce() {
     try {
         const response = await fetch(config.LOGIN_PAGE_URL, {
@@ -97,6 +98,7 @@ async function getNonce() {
         throw error;
     }
 }
+// Function to log in and save cookies
 async function login({ nonce, cookies }) {
     try {
         const formData = `nonce=${nonce}&username=demo%40example.org&password=test`;
@@ -151,6 +153,7 @@ async function login({ nonce, cookies }) {
         throw error;
     }
 }
+// Function to validate credentials by checking if the tokens are valid
 async function areCredentialsValid(cookies) {
     try {
         const response = await fetch(config.TOKENS_URL, {
@@ -171,6 +174,7 @@ async function areCredentialsValid(cookies) {
         return false;
     }
 }
+// Function to get credentials, either from file or by logging in
 async function getCredentials() {
     try {
         const sessionData = await fs_1.promises.readFile(config.CREDENTIALS_FILE, 'utf8');
@@ -232,6 +236,7 @@ async function fetchTokens(cookies) {
         throw error;
     }
 }
+// fetching current user details using the tokens
 async function fetchCurrentUser(cookies) {
     try {
         const tokens = await fetchTokens(cookies);
@@ -281,6 +286,7 @@ async function fetchCurrentUser(cookies) {
         throw error;
     }
 }
+// fetch all users from the API
 async function fetchUsers(cookies) {
     try {
         const response = await fetch(config.USERS_URL, {
@@ -349,27 +355,33 @@ async function fetchUsers(cookies) {
     }
 }
 async function main() {
-    const cookies = await getCredentials();
-    let users = [];
     try {
-        users = await fetchUsers(cookies);
-        console.log('Users API result length:', users.length);
+        const cookies = await getCredentials();
+        let users = [];
+        try {
+            users = await fetchUsers(cookies);
+            console.log('Users API result length:', users.length);
+        }
+        catch (error) {
+            console.error('Skipping users fetch due to error:', error.message);
+        }
+        let currentUser = {};
+        try {
+            currentUser = await fetchCurrentUser(cookies);
+        }
+        catch (error) {
+            console.error('Skipping current user fetch due to error:', error.message);
+        }
+        const allUsers = [...users, currentUser].filter((u) => Object.keys(u).length > 0);
+        if (allUsers.length !== 10) {
+            console.warn(`Expected 10 users, got ${allUsers.length}`);
+        }
+        await fs_1.promises.writeFile(config.OUTPUT_FILE, JSON.stringify(allUsers, null, 2));
+        console.log(`Data saved to ${config.OUTPUT_FILE}`);
     }
     catch (error) {
-        console.error('Skipping users fetch due to error:', error.message);
+        console.error('Error:', error.message);
+        process.exit(1);
     }
-    let currentUser = {};
-    try {
-        currentUser = await fetchCurrentUser(cookies);
-    }
-    catch (error) {
-        console.error('Skipping current user fetch due to error:', error.message);
-    }
-    const allUsers = [...users, currentUser].filter((u) => Object.keys(u).length > 0);
-    if (allUsers.length !== 10) {
-        console.warn(`Expected 10 users, got ${allUsers.length}`);
-    }
-    await fs_1.promises.writeFile(config.OUTPUT_FILE, JSON.stringify(allUsers, null, 2));
-    console.log(`Data saved to ${config.OUTPUT_FILE}`);
 }
 main();

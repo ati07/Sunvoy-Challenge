@@ -58,6 +58,7 @@ function createSignedRequest(params: Record<string, string>): SignedRequest {
   };
 }
 
+// Function to fetch nonce from the login page
 async function getNonce(): Promise<NonceResponse> {
   try {
     const response: Response = await fetch(config.LOGIN_PAGE_URL, {
@@ -89,6 +90,7 @@ async function getNonce(): Promise<NonceResponse> {
     throw error;
   }
 }
+// Function to log in and save cookies
 async function login({ nonce, cookies }: NonceResponse): Promise<string> {
   try {
     const formData: string = `nonce=${nonce}&username=demo%40example.org&password=test`;
@@ -143,6 +145,7 @@ async function login({ nonce, cookies }: NonceResponse): Promise<string> {
   }
 }
 
+// Function to validate credentials by checking if the tokens are valid
 async function areCredentialsValid(cookies: string): Promise<boolean> {
   try {
     const response: Response = await fetch(config.TOKENS_URL, {
@@ -163,6 +166,7 @@ async function areCredentialsValid(cookies: string): Promise<boolean> {
   }
 }
 
+// Function to get credentials, either from file or by logging in
 async function getCredentials(): Promise<string> {
   try {
     const sessionData: string = await fs.readFile(config.CREDENTIALS_FILE, 'utf8');
@@ -224,7 +228,7 @@ async function fetchTokens(cookies: string): Promise<Tokens> {
   }
 }
 
-
+// fetching current user details using the tokens
 async function fetchCurrentUser(cookies: string): Promise<User> {
   try {
     const tokens: Tokens = await fetchTokens(cookies);
@@ -273,6 +277,8 @@ async function fetchCurrentUser(cookies: string): Promise<User> {
     throw error;
   }
 }
+
+// fetch all users from the API
 async function fetchUsers(cookies: string): Promise<User[]> {
   try {
     const response: Response = await fetch(config.USERS_URL, {
@@ -340,17 +346,18 @@ async function fetchUsers(cookies: string): Promise<User[]> {
 }
 
 async function main(): Promise<void> {
-  const cookies = await getCredentials();
-
-  let users: User[] = [];
   try {
-    users = await fetchUsers(cookies);
-    console.log('Users API result length:', users.length);
-  } catch (error: any) {
-    console.error('Skipping users fetch due to error:', error.message);
-  }
+    const cookies = await getCredentials();
 
-  let currentUser: User = {};
+    let users: User[] = [];
+    try {
+      users = await fetchUsers(cookies);
+      console.log('Users API result length:', users.length);
+    } catch (error: any) {
+      console.error('Skipping users fetch due to error:', error.message);
+    }
+
+    let currentUser: User = {};
     try {
       currentUser = await fetchCurrentUser(cookies);
     } catch (error: any) {
@@ -364,6 +371,13 @@ async function main(): Promise<void> {
 
     await fs.writeFile(config.OUTPUT_FILE, JSON.stringify(allUsers, null, 2));
     console.log(`Data saved to ${config.OUTPUT_FILE}`);
+
+
+  } catch (error: any) {
+    console.error('Error:', error.message);
+    process.exit(1);
+  }
+
 }
 
 main();
