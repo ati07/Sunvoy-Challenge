@@ -33,17 +33,38 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
+const cheerio = __importStar(require("cheerio"));
 const fs_1 = require("fs");
 const path = __importStar(require("path"));
-const cheerio = __importStar(require("cheerio"));
+const crypto = __importStar(require("crypto"));
 const config = {
     BASE_URL: 'https://challenge.sunvoy.com',
     LOGIN_PAGE_URL: 'https://challenge.sunvoy.com/login',
     LOGIN_URL: 'https://challenge.sunvoy.com/login',
+    TOKENS_URL: 'https://challenge.sunvoy.com/settings/tokens',
     USERS_URL: 'https://challenge.sunvoy.com/api/users',
+    SETTINGS_URL: 'https://api.challenge.sunvoy.com/api/settings',
     CREDENTIALS_FILE: path.join(__dirname, 'session.json'),
     OUTPUT_FILE: path.join(__dirname, 'users.json'),
 };
+// Function to create checkcode and signed request
+function createSignedRequest(params) {
+    const timestamp = Math.floor(Date.now() / 1000).toString();
+    const payload = { ...params, timestamp };
+    const sortedKeys = Object.keys(payload).sort();
+    const encodedPayload = sortedKeys
+        .map((key) => `${key}=${encodeURIComponent(payload[key])}`)
+        .join('&');
+    const hmac = crypto.createHmac('sha1', 'mys3cr3t');
+    hmac.update(encodedPayload);
+    const checkcode = hmac.digest('hex').toUpperCase();
+    return {
+        payload: encodedPayload,
+        checkcode,
+        fullPayload: `${encodedPayload}&checkcode=${checkcode}`,
+        timestamp,
+    };
+}
 async function getNonce() {
     try {
         const response = await fetch(config.LOGIN_PAGE_URL, {
@@ -130,9 +151,135 @@ async function login({ nonce, cookies }) {
         throw error;
     }
 }
+async function areCredentialsValid(cookies) {
+    try {
+        const response = await fetch(config.TOKENS_URL, {
+            method: 'GET',
+            headers: {
+                'cookie': cookies,
+                'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36',
+            },
+        });
+        if (response.status !== 200) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        console.log('Credentials are valid');
+        return true;
+    }
+    catch (error) {
+        console.error('Credential validation failed:', error.message);
+        return false;
+    }
+}
 async function getCredentials() {
+    try {
+        const sessionData = await fs_1.promises.readFile(config.CREDENTIALS_FILE, 'utf8');
+        const { cookies } = JSON.parse(sessionData);
+        if (await areCredentialsValid(cookies)) {
+            console.log('Reusing existing credentials');
+            return cookies;
+        }
+    }
+    catch {
+        console.log('No valid credentials found, logging in');
+    }
     const nonceResponse = await getNonce(); // get nonce token and cookies
     return await login(nonceResponse);
+}
+// fetching toknes to fetch the current user details
+async function fetchTokens(cookies) {
+    try {
+        const response = await fetch(config.TOKENS_URL, {
+            method: 'GET',
+            headers: {
+                'cookie': cookies,
+                'accept': '*/*',
+                'accept-language': 'en-US,en;q=0.9',
+                'priority': 'u=1, i',
+                'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36',
+                'sec-ch-ua': '"Google Chrome";v="137", "Chromium";v="137", "Not/A)Brand";v="24"',
+                'sec-ch-ua-mobile': '?0',
+                'sec-ch-ua-platform': '"Windows"',
+                'sec-fetch-dest': 'empty',
+                'sec-fetch-mode': 'cors',
+                'sec-fetch-site': 'same-origin',
+                'referer': `${config.BASE_URL}/settings`,
+                'referrer-policy': 'strict-origin-when-cross-origin',
+            },
+        });
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        const text = await response.text();
+        const $ = cheerio.load(text);
+        const tokens = {
+            access_token: $('#access_token').val() || '',
+            userId: $('#userId').val() || '',
+            openId: $('#openId').val() || '',
+            operateId: $('#operateId').val() || '',
+            apiuser: $('#apiuser').val() || '',
+            language: $('#language').val() || '',
+        };
+        console.log('Tokens extracted:', tokens);
+        if (!tokens.access_token || !tokens.userId) {
+            console.error('Tokens response HTML:', text);
+            throw new Error('Failed to extract required tokens');
+        }
+        return tokens;
+    }
+    catch (error) {
+        console.error('Failed to fetch tokens:', error.message);
+        throw error;
+    }
+}
+async function fetchCurrentUser(cookies) {
+    try {
+        const tokens = await fetchTokens(cookies);
+        const params = {
+            access_token: tokens.access_token,
+            apiuser: tokens.apiuser,
+            language: tokens.language,
+            openId: tokens.openId,
+            operateId: tokens.operateId,
+            userId: tokens.userId,
+        };
+        const { fullPayload } = createSignedRequest(params);
+        console.log('Settings form data:', fullPayload);
+        const response = await fetch(config.SETTINGS_URL, {
+            method: 'POST',
+            headers: {
+                'cookie': cookies,
+                'accept': '*/*',
+                'accept-language': 'en-US,en;q=0.9',
+                'content-type': 'application/x-www-form-urlencoded',
+                'priority': 'u=1, i',
+                'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36',
+                'sec-ch-ua': '"Google Chrome";v="137", "Chromium";v="137", "Not/A)Brand";v="24"',
+                'sec-ch-ua-mobile': '?0',
+                'sec-ch-ua-platform': '"Windows"',
+                'sec-fetch-dest': 'empty',
+                'sec-fetch-mode': 'cors',
+                'sec-fetch-site': 'same-site',
+                'referer': config.BASE_URL,
+                'referrer-policy': 'strict-origin-when-cross-origin',
+                'content-length': Buffer.byteLength(fullPayload).toString(),
+            },
+            body: fullPayload,
+        });
+        if (!response.ok) {
+            const text = await response.text();
+            console.error('Response status:', response.status);
+            console.error('Response data:', text);
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        const data = await response.json();
+        console.log('Current user fetched successfully, data:', JSON.stringify(data, null, 2));
+        return data;
+    }
+    catch (error) {
+        console.error('Failed to fetch current user:', error.message);
+        throw error;
+    }
 }
 async function fetchUsers(cookies) {
     try {
@@ -203,7 +350,6 @@ async function fetchUsers(cookies) {
 }
 async function main() {
     const cookies = await getCredentials();
-    // console.log('Logged in with cookies:', cookies);
     let users = [];
     try {
         users = await fetchUsers(cookies);
@@ -212,7 +358,18 @@ async function main() {
     catch (error) {
         console.error('Skipping users fetch due to error:', error.message);
     }
-    await fs_1.promises.writeFile(config.OUTPUT_FILE, JSON.stringify(users, null, 2));
-    console.log(`Users saved to ${config.OUTPUT_FILE}`);
+    let currentUser = {};
+    try {
+        currentUser = await fetchCurrentUser(cookies);
+    }
+    catch (error) {
+        console.error('Skipping current user fetch due to error:', error.message);
+    }
+    const allUsers = [...users, currentUser].filter((u) => Object.keys(u).length > 0);
+    if (allUsers.length !== 10) {
+        console.warn(`Expected 10 users, got ${allUsers.length}`);
+    }
+    await fs_1.promises.writeFile(config.OUTPUT_FILE, JSON.stringify(allUsers, null, 2));
+    console.log(`Data saved to ${config.OUTPUT_FILE}`);
 }
 main();

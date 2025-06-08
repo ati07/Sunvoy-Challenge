@@ -34,10 +34,12 @@ const config = {
   LOGIN_URL: 'https://challenge.sunvoy.com/login',
   TOKENS_URL: 'https://challenge.sunvoy.com/settings/tokens',
   USERS_URL: 'https://challenge.sunvoy.com/api/users',
+  SETTINGS_URL: 'https://api.challenge.sunvoy.com/api/settings',
   CREDENTIALS_FILE: path.join(__dirname, 'session.json'),
   OUTPUT_FILE: path.join(__dirname, 'users.json'),
 };
 
+// Function to create checkcode and signed request
 function createSignedRequest(params: Record<string, string>): SignedRequest {
   const timestamp: string = Math.floor(Date.now() / 1000).toString();
   const payload: Record<string, string> = { ...params, timestamp };
@@ -176,6 +178,7 @@ async function getCredentials(): Promise<string> {
   return await login(nonceResponse);
 }
 
+// fetching toknes to fetch the current user details
 async function fetchTokens(cookies: string): Promise<Tokens> {
   try {
     const response: Response = await fetch(config.TOKENS_URL, {
@@ -217,6 +220,56 @@ async function fetchTokens(cookies: string): Promise<Tokens> {
     return tokens;
   } catch (error: any) {
     console.error('Failed to fetch tokens:', error.message);
+    throw error;
+  }
+}
+
+
+async function fetchCurrentUser(cookies: string): Promise<User> {
+  try {
+    const tokens: Tokens = await fetchTokens(cookies);
+    const params: Record<string, string> = {
+      access_token: tokens.access_token,
+      apiuser: tokens.apiuser,
+      language: tokens.language,
+      openId: tokens.openId,
+      operateId: tokens.operateId,
+      userId: tokens.userId,
+    };
+    const { fullPayload }: SignedRequest = createSignedRequest(params);
+    console.log('Settings form data:', fullPayload);
+    const response: Response = await fetch(config.SETTINGS_URL, {
+      method: 'POST',
+      headers: {
+        'cookie': cookies,
+        'accept': '*/*',
+        'accept-language': 'en-US,en;q=0.9',
+        'content-type': 'application/x-www-form-urlencoded',
+        'priority': 'u=1, i',
+        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36',
+        'sec-ch-ua': '"Google Chrome";v="137", "Chromium";v="137", "Not/A)Brand";v="24"',
+        'sec-ch-ua-mobile': '?0',
+        'sec-ch-ua-platform': '"Windows"',
+        'sec-fetch-dest': 'empty',
+        'sec-fetch-mode': 'cors',
+        'sec-fetch-site': 'same-site',
+        'referer': config.BASE_URL,
+        'referrer-policy': 'strict-origin-when-cross-origin',
+        'content-length': Buffer.byteLength(fullPayload).toString(),
+      },
+      body: fullPayload,
+    });
+    if (!response.ok) {
+      const text: string = await response.text();
+      console.error('Response status:', response.status);
+      console.error('Response data:', text);
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    const data: User = await response.json();
+    console.log('Current user fetched successfully, data:', JSON.stringify(data, null, 2));
+    return data;
+  } catch (error: any) {
+    console.error('Failed to fetch current user:', error.message);
     throw error;
   }
 }
@@ -296,8 +349,21 @@ async function main(): Promise<void> {
   } catch (error: any) {
     console.error('Skipping users fetch due to error:', error.message);
   }
-  await fs.writeFile(config.OUTPUT_FILE, JSON.stringify(users, null, 2));
-  console.log(`Users saved to ${config.OUTPUT_FILE}`);
+
+  let currentUser: User = {};
+    try {
+      currentUser = await fetchCurrentUser(cookies);
+    } catch (error: any) {
+      console.error('Skipping current user fetch due to error:', error.message);
+    }
+    const allUsers: User[] = [...users, currentUser].filter((u: User) => Object.keys(u).length > 0);
+
+    if (allUsers.length !== 10) {
+      console.warn(`Expected 10 users, got ${allUsers.length}`);
+    }
+
+    await fs.writeFile(config.OUTPUT_FILE, JSON.stringify(allUsers, null, 2));
+    console.log(`Data saved to ${config.OUTPUT_FILE}`);
 }
 
 main();
